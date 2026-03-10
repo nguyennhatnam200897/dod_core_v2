@@ -371,9 +371,9 @@ export const Motherboard = {
             const comp = Motherboard.components[id];
             if (!comp || comp.mem.U8[comp.isActiveIndex] === 0) continue;
 
-            // 🌟 1. BÁN CẦU TRÁI (JS): Chạy để đọc window.DB (globalRead)
-            // keepFlags = true để giữ nguyên Cờ cho Rust
-            runDispatch(comp.mem, comp.mem.L1_C, comp.mem.L2_C, comp.mem.FLAGS_C, comp.BATCHES_C, true);
+            // // 🌟 1. BÁN CẦU TRÁI (JS): Chạy để đọc window.DB (globalRead)
+            // // keepFlags = true để giữ nguyên Cờ cho Rust
+            // runDispatch(comp.mem, comp.mem.L1_C, comp.mem.L2_C, comp.mem.FLAGS_C, comp.BATCHES_C, true);
 
             // 🌟 2. BÁN CẦU PHẢI (Rust): Chạy toán học và tự động dọn dẹp Cờ (Clear Flags)
             comp.mem._rustCore.tick_compute();
@@ -401,7 +401,24 @@ export const Motherboard = {
             if (compDirty) runDispatch(comp.mem, comp.mem.L1_R, comp.mem.L2_R, comp.mem.FLAGS_R, comp.BATCHES_R);
         }
         Motherboard.isRenderScheduled = false;
-    }
+    },
+
+    // 🌟 THÊM MỚI: API cho dự án nạp Database vào Engine
+    loadDatabase: (slotIndex, type, typedArray) => {
+        // Lặp qua tất cả các Component đang chạy và nạp dữ liệu vào Lõi Rust của chúng
+        for (let i = 0; i < Motherboard.compCount; i++) {
+            const comp = Motherboard.components[i];
+            if (comp && comp.mem && comp.mem._rustCore) {
+                if (type === 'I32' || type === 'STR') {
+                    // Chú ý: Chuỗi (STR) trong Engine của bạn được lưu dưới dạng ID (I32)
+                    comp.mem._rustCore.load_db_i32(slotIndex, typedArray);
+                } else if (type === 'F64') {
+                    comp.mem._rustCore.load_db_f64(slotIndex, typedArray);
+                }
+            }
+        }
+        console.log(`[Engine] Đã nạp Database ${type} vào khe số ${slotIndex}`);
+    },
 };
 
 // ==============================================================
@@ -678,7 +695,7 @@ function initGlobalDelegation(eventName) {
 
             // 🌟 MỚI: Đẩy lệnh vào Hộp thư thoại (Input Buffer)
             // Lưu ý: Chúng ta đẩy kèm cả biến 'e' (event gốc) vào cuối mảng args
-            Motherboard.pushEvent(mbId, actionName, [...args, e]);
+            Motherboard.pushEvent(mbId, actionName, args);
         }
     });
 }

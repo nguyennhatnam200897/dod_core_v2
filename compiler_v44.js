@@ -144,18 +144,22 @@ class CompilerContext {
             semantic: 'NUM', 
             pipeline: 'COMPUTE', 
             inputs: [rA.id, rB.id],
-            // 🌟 KIẾN TRÚC HYBRID DOD: 
-            // Nếu là Chuỗi -> Ép Não Trái (JS) làm việc. 
-            // Nếu là Số -> Ép Não Phải (Rust) làm việc.
-            skipRust: isStringComparison, 
-            skipJS: !isStringComparison,  
+            // // 🌟 KIẾN TRÚC HYBRID DOD: 
+            // // Nếu là Chuỗi -> Ép Não Trái (JS) làm việc. 
+            // // Nếu là Số -> Ép Não Phải (Rust) làm việc.
+            // skipRust: isStringComparison, 
+            // skipJS: !isStringComparison,
+
+            // Luôn luôn nhường Node COMPUTE này cho Rust xử lý (skipJS: true)
+            skipJS: true,
+
             gen: (acc, target) => {
                 if (target === 'RUST') {
-                    if (isStringComparison) return `0`; // Rust mù chuỗi, trả về 0 để bỏ qua
                     const rustOp = operator === '===' ? '==' : '!=';
+                    // Rust giờ đây sẽ so sánh trực tiếp 2 số I32 (String IDs)
                     return `if ${acc[0]} ${rustOp} ${acc[1]} { 1 } else { 0 }`;
                 }
-                
+                // Code JS dự phòng (không còn chạy nữa nhưng cứ để lại cho an toàn)
                 let valX = acc[0], valY = acc[1];
                 if (isStrA) valX = `(${acc[0]} >= 0 ? (LUT[${acc[0]}] || LUT[0]) : getDynamicString(${acc[0]}))`;
                 if (isStrB) valY = `(${acc[1]} >= 0 ? (LUT[${acc[1]}] || LUT[0]) : getDynamicString(${acc[1]}))`;
@@ -196,25 +200,38 @@ class CompilerContext {
         });
     }
 
-    // Lệnh chọc thẳng vào RAM Toàn cục (Tạm thời trả về 0 cho Rust để chuẩn bị cho bước gắn Database)
-    globalRead(globalArrStr, idxInput, forceType, unpackConfig = null) {
+    // 🌟 Đã sửa: Đổi tham số đầu tiên thành slotIndex (Số nguyên)
+    dbRead(slotIndex, idxInput, forceType, unpackConfig = null) {
+        if (typeof slotIndex !== 'number' || slotIndex < 0 || slotIndex > 15) {
+            throw new Error(`[DSL Error] dbRead yêu cầu slotIndex từ 0 đến 15. Nhận được: ${slotIndex}`);
+        }
+
         const rIdx = this._resolve(idxInput);
         const physicalMem = (forceType === 'STR') ? 'I32' : forceType;
         const semanticType = (forceType === 'STR') ? 'STR' : 'NUM';
 
         return this._add({
             type: 'COMPUTE', mem: physicalMem, semantic: semanticType, pipeline: 'COMPUTE', inputs: [rIdx.id],
-            skipRust: true, // 🌟 Não Phải (Rust) bỏ qua, nhường cho JS đọc Database
+            
+            // ✅ Đẩy 100% việc đọc Database cho Rust (Giống như chúng ta đã chốt ở trên)
+            skipJS: true, 
+            
             gen: (acc, target) => {
-                if (target === 'RUST') return `0`; // 🌟 Bí kíp giữ Rust không lỗi ở bước này
-                
-                let valExpr = `${globalArrStr}[${acc[0]}]`;
-                if (unpackConfig) {
-                    if (unpackConfig.shift) valExpr = `(${valExpr} >> ${unpackConfig.shift})`;
-                    if (unpackConfig.mask)  valExpr = `(${valExpr} & ${unpackConfig.mask})`;
+                if (target === 'RUST') {
+                    // Tự động phân luồng khe cắm dựa trên kiểu dữ liệu
+                    const rustSlotName = physicalMem === 'F64' ? 'db_f64_slots' : 'db_i32_slots';
+                    
+                    // Mã Rust sinh ra sẽ là: self.db_f64_slots[0][id as usize]
+                    let valExpr = `self.${rustSlotName}[${slotIndex}][${acc[0]} as usize]`;
+                    
+                    if (unpackConfig) {
+                        if (unpackConfig.shift) valExpr = `(${valExpr} >> ${unpackConfig.shift})`;
+                        if (unpackConfig.mask)  valExpr = `(${valExpr} & ${unpackConfig.mask})`;
+                    }
+                    return valExpr;
                 }
-                if (forceType === 'STR') return `setDynamicString(${valExpr})`;
-                return valExpr;
+                
+                return `0`; 
             }
         });
     }

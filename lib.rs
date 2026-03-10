@@ -16,6 +16,11 @@ pub struct MotherboardCore {
     flags_r: Vec<u32>,
     l2_r:    Vec<u32>,
     l1_r:    Vec<u32>,
+
+    // 🌟 THÊM MỚI: CÁC KHE CẮM DATABASE DÙNG CHUNG (SLOTS)
+    // Sử dụng mảng cố định (fixed array) để CPU lấy dữ liệu cực nhanh O(1)
+    db_i32_slots: [Vec<i32>; 16],
+    db_f64_slots: [Vec<f64>; 16],
 }
 
 #[wasm_bindgen]
@@ -38,6 +43,9 @@ impl MotherboardCore {
             flags_r: vec![0; count_l0],
             l2_r:    vec![0; count_l1],
             l1_r:    vec![0; count_l2],
+            // 🌟 KHỞI TẠO CÁC KHE CẮM TRỐNG
+            db_i32_slots: Default::default(),
+            db_f64_slots: Default::default(),
         }
     }
 
@@ -88,6 +96,21 @@ impl MotherboardCore {
                     self.execute_batch(flag_idx, mask_flags);
                 }
             }
+        }
+    }
+    // =========================================================
+    // 🌟 API CUNG CẤP CHO DỰ ÁN ĐỂ NẠP DATABASE TỪ JS
+    // =========================================================
+    
+    pub fn load_db_i32(&mut self, slot: usize, data: &[i32]) {
+        if slot < 16 {
+            self.db_i32_slots[slot] = data.to_vec();
+        }
+    }
+
+    pub fn load_db_f64(&mut self, slot: usize, data: &[f64]) {
+        if slot < 16 {
+            self.db_f64_slots[slot] = data.to_vec();
         }
     }
 }

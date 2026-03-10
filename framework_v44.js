@@ -410,10 +410,10 @@ export const blueprint = (componentName, setupFn) => {
         // --- 9. TIỆN ÍCH ---
         cast: (a, type) => resolve(a).cast(type),
 
-        // Cập nhật dòng globalRead bên dưới các hàm state:
-        globalRead: (globalArrStr, indexNode, type, unpackConfig = null) => {
-            const node = compiler.globalRead(globalArrStr, indexNode, type, unpackConfig);
-            return new NodeHandle(node._id, type);
+        // Cập nhật dòng dbRead bên dưới các hàm state:
+        dbRead: (slotIndex, idxInput, forceType, unpackConfig = null) => {
+            const node = compiler.dbRead(slotIndex, idxInput, forceType, unpackConfig);
+            return new NodeHandle(node._id, forceType);
         },
 
         // 🌟 THÊM MỚI CHỖ NÀY: API đọc chuỗi nhị phân
