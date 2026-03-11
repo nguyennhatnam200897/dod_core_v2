@@ -201,9 +201,9 @@ class CompilerContext {
     }
 
     // 🌟 Đã sửa: Đổi tham số đầu tiên thành slotIndex (Số nguyên)
-    dbRead(slotIndex, idxInput, forceType, unpackConfig = null) {
+    readSlot(slotIndex, idxInput, forceType, unpackConfig = null) {
         if (typeof slotIndex !== 'number' || slotIndex < 0 || slotIndex > 15) {
-            throw new Error(`[DSL Error] dbRead yêu cầu slotIndex từ 0 đến 15. Nhận được: ${slotIndex}`);
+            throw new Error(`[DSL Error] readSlot yêu cầu slotIndex từ 0 đến 15. Nhận được: ${slotIndex}`);
         }
 
         const rIdx = this._resolve(idxInput);

@@ -410,9 +410,9 @@ export const blueprint = (componentName, setupFn) => {
         // --- 9. TIỆN ÍCH ---
         cast: (a, type) => resolve(a).cast(type),
 
-        // Cập nhật dòng dbRead bên dưới các hàm state:
-        dbRead: (slotIndex, idxInput, forceType, unpackConfig = null) => {
-            const node = compiler.dbRead(slotIndex, idxInput, forceType, unpackConfig);
+        // Cập nhật dòng readSlot bên dưới các hàm state:
+        readSlot: (slotIndex, idxInput, forceType, unpackConfig = null) => {
+            const node = compiler.readSlot(slotIndex, idxInput, forceType, unpackConfig);
             return new NodeHandle(node._id, forceType);
         },
 
