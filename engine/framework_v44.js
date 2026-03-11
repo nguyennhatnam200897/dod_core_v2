@@ -312,7 +312,20 @@ export const blueprint = (componentName, setupFn) => {
                 callJS: (fnName, ...argsInputs) => {
                     const argIds = argsInputs.map(a => resolve(a).id);
                     dispatches.push({ type: 'CALL_JS', fnName, argIds });
-                }
+                },
+                // 🌟 API TÌM KIẾM HASHTAG CHÍNH THỨC CỦA ENGINE
+                searchHashtags: (queryArrayStr, isAndStr, poolName, totalProducts) => {
+                    // BẬT CÔNG TẮC: Báo cho Compiler biết user có dùng tính năng này!
+                    compiler.useHashtagEngine = true; 
+                    
+                    dispatches.push({ 
+                        type: 'SEARCH_HASHTAGS', 
+                        queryArray: queryArrayStr, 
+                        isAnd: isAndStr, 
+                        totalProducts, 
+                        poolName 
+                    });
+                },
             };
 
             // Chạy logic của user để xây đồ thị và thu thập assignments
@@ -524,6 +537,68 @@ export const buildApp = (components, outputDir = './src/js/generated') => {
     });
 
     combinedRustCode += `            _ => {}\n        }\n    }\n}\n`;
+
+    // NẾU COMPILER PHÁT HIỆN TÍNH NĂNG ĐƯỢC SỬ DỤNG -> BƠM MÃ RUST VÀO!
+    if (compiler.useHashtagEngine) {
+        combinedRustCode += `
+#[wasm_bindgen]
+impl MotherboardCore {
+    pub fn run_hashtag_search(&mut self, query_tags: &[i32], is_and: bool, total_products: usize) -> usize {
+        if self.hashtag_results.len() < total_products {
+            self.hashtag_results = vec![0; total_products];
+        }
+        if self.hashtag_counters.len() < total_products {
+            self.hashtag_counters = vec![0; total_products];
+        } else {
+            self.hashtag_counters.fill(0); 
+        }
+
+        if query_tags.is_empty() {
+            for i in 0..total_products { self.hashtag_results[i] = i as i32; }
+            return total_products;
+        }
+
+        let mut match_count = 0;
+
+        if is_and {
+            let required_matches = query_tags.len() as i32;
+            for &tag in query_tags {
+                let tidx = tag as usize;
+                let start = self.hashtag_starts[tidx] as usize;
+                let len = self.hashtag_lengths[tidx] as usize;
+                for i in start..(start + len) {
+                    let pid = self.hashtag_product_ids[i] as usize;
+                    if pid < total_products { self.hashtag_counters[pid] += 1; }
+                }
+            }
+            for pid in 0..total_products {
+                if self.hashtag_counters[pid] == required_matches {
+                    self.hashtag_results[match_count] = pid as i32;
+                    match_count += 1;
+                }
+            }
+        } else {
+            for &tag in query_tags {
+                let tidx = tag as usize;
+                let start = self.hashtag_starts[tidx] as usize;
+                let len = self.hashtag_lengths[tidx] as usize;
+                for i in start..(start + len) {
+                    let pid = self.hashtag_product_ids[i] as usize;
+                    if pid < total_products { self.hashtag_counters[pid] = 1; }
+                }
+            }
+            for pid in 0..total_products {
+                if self.hashtag_counters[pid] == 1 {
+                    self.hashtag_results[match_count] = pid as i32;
+                    match_count += 1;
+                }
+            }
+        }
+        match_count
+    }
+}
+`;
+    }
 
     // 4. Sinh file Core Bootloader (Chỉ chứa setup ban đầu, cực nhẹ)
     const coreFilePath = `${outputDir}/core.js`;

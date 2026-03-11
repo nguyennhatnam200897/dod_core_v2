@@ -1,0 +1,21 @@
+/my-ecommerce-project
+├── ⚙️ engine/                 (Giữ nguyên 4 file engine và lõi Rust)
+├── 🗄️ backend/                (Giữ nguyên generate_db.js)
+│
+├── 💻 src/                    <-- KHU VỰC BẠN LẬP TRÌNH LOGIC
+│   ├── build.js              (Script biên dịch toàn bộ App)
+│   ├── main.js               (Điểm neo khởi động và Cấu hình Router)
+│   ├── components/           (Các mảnh ghép tái sử dụng)
+│   └── views/                (Logic của từng Trang)
+│       ├── HomeView.js       
+│       └── CartView.js       
+│
+└── 🌐 public/                 <-- KHU VỰC DEPLOY LÊN GITHUB PAGES
+    ├── 404.html              (🌟 VŨ KHÍ BÍ MẬT CHO GITHUB PAGES)
+    ├── index.html            (Vỏ bọc SPA - App Shell)
+    ├── style.css             
+    ├── api/                  (Chứa các file .bin Database)
+    ├── views/                (Chứa giao diện HTML thô của các Trang)
+    │   ├── home.html
+    │   └── cart.html
+    └── dist/                 (Thư mục Engine tự động sinh code ra đây)

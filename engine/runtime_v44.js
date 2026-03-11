@@ -93,14 +93,13 @@ export const Motherboard = {
         }
     },
 
-    register: (name, mem, BATCHES_C, BATCHES_R, exportedNodeIds = {}, exportedActions = {}, actions = {}, isActiveIndex = 0) => {
-        // 🌟 Cấp cho mỗi Component một "Mã số định danh" (ID Nguyên thủy)
+    register: (name, mem, BATCHES_R, exportedNodeIds = {}, exportedActions = {}, actions = {}, isActiveIndex = 0) => {
         const id = Motherboard.compCount++;
-        const comp = { id, name, mem, BATCHES_C, BATCHES_R, nodes: exportedNodeIds, exportedActions, actions, isActiveIndex };
+        const comp = { id, name, mem, BATCHES_R, nodes: exportedNodeIds, exportedActions, actions, isActiveIndex };
         
         Motherboard.components[id] = comp;
         Motherboard.nameToId.set(name, id);
-        return id; // Trả về ID để Compiler sử dụng
+        return id; 
     },
 
     // 🌟 THUẬT TOÁN ĐẨY VÀO HÀNG ĐỢI O(1)
@@ -371,11 +370,7 @@ export const Motherboard = {
             const comp = Motherboard.components[id];
             if (!comp || comp.mem.U8[comp.isActiveIndex] === 0) continue;
 
-            // // 🌟 1. BÁN CẦU TRÁI (JS): Chạy để đọc window.DB (globalRead)
-            // // keepFlags = true để giữ nguyên Cờ cho Rust
-            // runDispatch(comp.mem, comp.mem.L1_C, comp.mem.L2_C, comp.mem.FLAGS_C, comp.BATCHES_C, true);
-
-            // 🌟 2. BÁN CẦU PHẢI (Rust): Chạy toán học và tự động dọn dẹp Cờ (Clear Flags)
+            // 🌟 BÁN CẦU PHẢI (Rust): Chạy toán học và tự động dọn dẹp Cờ (Clear Flags)
             comp.mem._rustCore.tick_compute();
         }
 
@@ -418,6 +413,44 @@ export const Motherboard = {
             }
         }
         console.log(`[Engine] Đã nạp Database ${type} vào khe số ${slotIndex}`);
+    },
+    
+    // 🌟 1. NẠP DATABASE HASHTAG TỪ SERVER
+    loadHashtagDatabase: (startsArray, lengthsArray, pidsArray) => {
+        for (let i = 0; i < Motherboard.compCount; i++) {
+            const comp = Motherboard.components[i];
+            if (comp && comp.mem && comp.mem._rustCore) {
+                // Ép kiểu đảm bảo an toàn bộ nhớ
+                comp.mem._rustCore.load_hashtag_db(
+                    new Int32Array(startsArray), 
+                    new Int32Array(lengthsArray), 
+                    new Int32Array(pidsArray)
+                );
+            }
+        }
+        console.log(`[Engine] Đã nạp thành công Database Hashtag (Inverted Index)`);
+    },
+
+    // 🌟 2. CẦU NỐI THỰC THI SEARCH VÀ NẠP VÀO VIRTUAL SCROLL
+    searchAndRenderHashtags: (mbId, queryArray, isAnd, poolName, totalProducts) => {
+        const comp = Motherboard.components[mbId];
+        if (!comp || !comp.mem || !comp.mem._rustCore) return;
+
+        const rustCore = comp.mem._rustCore;
+        const queryTags = new Int32Array(queryArray); 
+
+        // 1. Chạy Search Engine trong Rust O(K)
+        const matchCount = rustCore.run_hashtag_search(queryTags, isAnd, totalProducts);
+
+        // 2. ZERO-COPY VIEW: Trích xuất mảng ID kết quả
+        const ptr = rustCore.ptr_hashtag_results();
+        const matchedIds = new Int32Array(wasmModule.memory.buffer, ptr, matchCount);
+
+        // 3. Đẩy thẳng kết quả vào Pool Cuộn Ảo để render lập tức
+        const pool = Motherboard.pools[poolName];
+        if (pool && pool._updateData) {
+            pool._updateData(matchedIds);
+        }
     },
 };
 
@@ -745,12 +778,12 @@ export function markBatch(FLAGS, L2, L1, GRAPH, start, end) {
     }
 }
 
-export function runDispatch(mem, L1, L2, FLAGS, BATCHES, keepFlags = false) {
+export function runDispatch(mem, L1, L2, FLAGS, BATCHES) {
     const len = L1.length;
     for (let i = 0; i < len; i++) {
         let maskL1 = L1[i];
         if (maskL1 === 0) continue;
-        if (!keepFlags) L1[i] = 0; // 🌟 CHỈ XÓA NẾU KHÔNG GIỮ CỜ
+        L1[i] = 0; // Xóa cờ ngay
 
         while (maskL1 !== 0) {
             const offsetL1 = Math.clz32(maskL1); 
@@ -759,7 +792,7 @@ export function runDispatch(mem, L1, L2, FLAGS, BATCHES, keepFlags = false) {
             
             let maskL2 = L2[l2Idx];
             if (maskL2 === 0) continue;
-            if (!keepFlags) L2[l2Idx] = 0; // 🌟 CHỈ XÓA NẾU KHÔNG GIỮ CỜ
+            L2[l2Idx] = 0; // Xóa cờ ngay
 
             while (maskL2 !== 0) {
                 const offsetL2 = Math.clz32(maskL2);
@@ -768,7 +801,7 @@ export function runDispatch(mem, L1, L2, FLAGS, BATCHES, keepFlags = false) {
                 
                 let maskFlags = FLAGS[flagIdx];
                 if (maskFlags === 0) continue;
-                if (!keepFlags) FLAGS[flagIdx] = 0; // 🌟 CHỈ XÓA NẾU KHÔNG GIỮ CỜ
+                FLAGS[flagIdx] = 0; // Xóa cờ ngay
 
                 const batchFn = BATCHES[flagIdx];
                 if (batchFn) batchFn(mem, maskFlags);
@@ -822,15 +855,14 @@ export function initObjectPool(compName, factoryFn, containerSelector, poolSize)
 // 🌟 TRÌNH ĐIỀU HƯỚNG DOD (STATIC VIEW POOLING ROUTER)
 // ==============================================================
 export const Router = {
-    routes: {},             // Cấu hình bản đồ định tuyến
-    viewInstances: {},      // Kho chứa các Component đã được "Cắm rễ" (để giữ cho DOM bất tử)
-    activeViewName: null,   // Theo dõi trang đang được hiển thị
+    routes: {},
+    viewInstances: {},
+    activeViewName: null,
 
-    // Khởi tạo Router với danh sách các tuyến đường
     init: (containerSelector, routesConfig) => {
         Router.routes = routesConfig;
         
-        // Lắng nghe mọi cú click trên toàn trang (Event Delegation)
+        // Bắt sự kiện Click thẻ <a> để điều hướng SPA
         document.body.addEventListener('click', e => {
             const a = e.target.closest('a[data-link]');
             if (a) {
@@ -839,93 +871,97 @@ export const Router = {
             }
         });
         
-        // Lắng nghe sự kiện Back/Forward của trình duyệt
         window.addEventListener('popstate', () => {
             Router.navigate(location.pathname, containerSelector, false);
         });
 
-        // Kích hoạt trang đầu tiên ngay khi boot
-        Router.navigate(location.pathname, containerSelector, false);
+        // 🌟 BẢN VÁ SSG: Nhận diện lần tải trang đầu tiên (Initial Load)
+        // Lúc này HTML đã có sẵn do Server (hoặc GitHub Pages) trả về
+        const currentPath = location.pathname;
+        const initialRoute = Router.routes[currentPath] || Router.routes['/404'];
+        
+        if (initialRoute) {
+            Router.activeViewName = initialRoute.name;
+            // Ép Engine nhận diện DOM hiện tại thay vì fetch mới
+            Router._mountInitialView(initialRoute, containerSelector);
+        }
+    },
+
+    // 🌟 THÊM MỚI: Thức tỉnh HTML tĩnh có sẵn
+    _mountInitialView: async (route, containerSelector) => {
+        const container = document.querySelector(containerSelector);
+        if (!container || !container.firstElementChild) return;
+
+        try {
+            // Chỉ tải Logic (JS Chunk), KHÔNG tải HTML
+            const module = await route.fetcher(true); 
+            
+            // Cắm điện trực tiếp vào Root Node có sẵn trên trang
+            const rootNode = container.firstElementChild;
+            const targetInstance = module.factory(rootNode);
+            
+            Router.viewInstances[route.name] = targetInstance;
+            Motherboard.enqueue(targetInstance._mbId);
+            Motherboard.wakeUp();
+            
+            console.log(`[Router SSG] Đã Hydrate thành công trang: ${route.name} 💧`);
+        } catch (err) {
+            console.error(`[Router SSG] Lỗi Hydrate:`, err);
+        }
     },
 
     navigate: async (path, containerSelector, push) => {
-        // 1. Tìm tuyến đường tương ứng (Fallback về 404 nếu không thấy)
         const route = Router.routes[path] || Router.routes['/404'];
-        if (!route) {
-            console.error(`[Router DOD] Lỗi: Không tìm thấy route cho ${path}`);
-            return;
-        }
+        if (!route) return;
 
         if (push) history.pushState({}, "", path);
-
         const targetName = route.name;
-        const container = document.querySelector(containerSelector);
-        if (!container) return;
 
-        // -----------------------------------------------------------
-        // 🌟 GIAI ĐOẠN 1: NGỦ ĐÔNG (UNPLUG) TRANG HIỆN TẠI (O(1))
-        // -----------------------------------------------------------
+        // 🌟 TỐI ƯU 1: DÙNG DETACH ĐỂ NHỔ TRANG CŨ CẤT VÀO RAM
         if (Router.activeViewName && Router.activeViewName !== targetName) {
             const oldInstance = Router.viewInstances[Router.activeViewName];
-            if (oldInstance && typeof oldInstance.unplug === 'function') {
-                // Rút điện RAM (Ghi số 0 vào mem.U8) và gán display: none
-                oldInstance.unplug(); 
+            if (oldInstance && typeof oldInstance.detach === 'function') {
+                // Rút điện, nhổ DOM khỏi màn hình một cách an toàn
+                oldInstance.detach(); 
             }
         }
 
-        // -----------------------------------------------------------
-        // 🌟 GIAI ĐOẠN 2: THỨC TỈNH HOẶC CẮM RỄ TRANG MỚI
-        // -----------------------------------------------------------
+        const container = document.querySelector(containerSelector);
         let targetInstance = Router.viewInstances[targetName];
 
         if (!targetInstance) {
-            // TRƯỜNG HỢP A: LẦN ĐẦU TIÊN TRUY CẬP (Lazy Allocation)
-            console.log(`[Router DOD] ⚡ Bơm RAM & Cắm rễ View: ${targetName}...`);
-            try {
-                // Gọi Dynamic Import để tải Chunk (JS + Chuỗi HTML)
-                const module = await route.fetcher();
-                
-                // Bơm HTML tĩnh vào cuối Container. Thao tác này chỉ tốn chi phí 1 LẦN DUY NHẤT.
-                container.insertAdjacentHTML('beforeend', module.html);
-                
-                // Lấy thẻ gốc (root node) vừa được bơm vào
-                const rootNode = container.lastElementChild;
-                
-                // Khởi tạo Component (Cấp phát RAM Rust, Hydrate, Đóng dấu Event)
-                // module.factory chính là hàm createXYZ mà compiler sinh ra
-                targetInstance = module.factory(rootNode);
-                
-                // Lưu vào kho để nó trở thành "Bất tử"
-                Router.viewInstances[targetName] = targetInstance;
-                
-            } catch (err) {
-                console.error(`[Router DOD] ❌ Lỗi tải chunk ${targetName}:`, err);
-                return;
-            }
-        } else {
-            // TRƯỜNG HỢP B: TỪ LẦN THỨ 2 TRỞ ĐI (Zero-Allocation Navigation)
-            targetInstance.plug();
-            Motherboard.enqueue(targetInstance._mbId);
+            // Lần đầu truy cập qua SPA -> Fetch HTML mới
+            console.log(`[Router SPA] ⚡ Fetch và Bơm View: ${targetName}...`);
+            const module = await route.fetcher(false);
             
-            // 🌟 CHUẨN FRAMEWORK: Lõi Engine chỉ phát tín hiệu báo cáo vòng đời (Lifecycle hook)
-            // Tuyệt đối không chứa logic dự án ở đây.
+            // 🌟 TỐI ƯU 2: KHÔNG DÙNG innerHTML ĐỂ TRÁNH XÓA RÁC CỦA THẰNG KHÁC
+            // Tạo một thẻ bọc tạm thời để lấy cái DOM đầu tiên ra
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = module.html;
+            const rootNode = tempDiv.firstElementChild;
+            
+            // Cắm thẻ mới này vào vùng chứa
+            container.appendChild(rootNode);
+            
+            targetInstance = module.factory(rootNode);
+            Router.viewInstances[targetName] = targetInstance;
+        } else {
+            // 🌟 TỐI ƯU 3: TỪ LẦN 2 TRỞ ĐI -> LẤY TỪ RAM RA TRỒNG LẠI XUỐNG ĐẤT
+            // Lệnh restore() sẽ tự động insert DOM vào lại vị trí cũ và gọi plug()
+            targetInstance.restore();
+            
             window.dispatchEvent(new CustomEvent('dod:view-plugged', { detail: targetName }));
         }
 
-        // 3. Cập nhật trạng thái và ép Frame tiếp theo render
+        Motherboard.enqueue(targetInstance._mbId);
         Router.activeViewName = targetName;
         Motherboard.wakeUp();
     }
 };
 
-
 // ==============================================================
 // 🌟 KHO LƯU TRỮ TOÀN CỤC (GLOBAL STORE) - ENGINE KHÔNG CAN THIỆP
 // ==============================================================
-export const DB = {}; 
-if (typeof window !== 'undefined') {
-    window.DB = DB; // Phơi ra window để Component dễ truy xuất
-}
 
 // Trình giải mã chuỗi từ vùng nhớ Nhị phân (Engine cung cấp công cụ, Project tự nạp data)
 const dbDecoder = new TextDecoder();

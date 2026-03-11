@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>{{TITLE}}</title>
+    <meta name="description" content="{{META_DESC}}">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <a href="/" data-link>DOD Shop</a>
+        <a href="/cart" data-link>Giỏ hàng (<span id="cart-counter">0</span>)</a>
+    </header>
+
+    <main id="app-container">
+        {{PAGE_CONTENT}}
+    </main>
+
+    <script type="module" src="/dist/core.js"></script>
+    <script type="module" src="/main.js"></script>
+</body>
+</html>

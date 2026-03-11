@@ -17,6 +17,13 @@ pub struct MotherboardCore {
     l2_r:    Vec<u32>,
     l1_r:    Vec<u32>,
 
+    // 🌟 TÍNH NĂNG CHÍNH: HỆ THỐNG HASHTAG (INVERTED INDEX)
+    hashtag_starts: Vec<i32>,
+    hashtag_lengths: Vec<i32>,
+    hashtag_product_ids: Vec<i32>,
+    hashtag_results: Vec<i32>,
+    hashtag_counters: Vec<i32>,
+
     // 🌟 THÊM MỚI: CÁC KHE CẮM DATABASE DÙNG CHUNG (SLOTS)
     // Sử dụng mảng cố định (fixed array) để CPU lấy dữ liệu cực nhanh O(1)
     db_i32_slots: [Vec<i32>; 16],
@@ -43,6 +50,11 @@ impl MotherboardCore {
             flags_r: vec![0; count_l0],
             l2_r:    vec![0; count_l1],
             l1_r:    vec![0; count_l2],
+            hashtag_starts: Vec::new(),
+            hashtag_lengths: Vec::new(),
+            hashtag_product_ids: Vec::new(),
+            hashtag_results: Vec::new(),
+            hashtag_counters: Vec::new(),
             // 🌟 KHỞI TẠO CÁC KHE CẮM TRỐNG
             db_i32_slots: Default::default(),
             db_f64_slots: Default::default(),
@@ -112,6 +124,19 @@ impl MotherboardCore {
         if slot < 16 {
             self.db_f64_slots[slot] = data.to_vec();
         }
+    }
+    
+    // =========================================================
+    // 🌟 API NẠP DATABASE HASHTAG TỪ JS
+    // =========================================================
+    pub fn load_hashtag_db(&mut self, starts: &[i32], lengths: &[i32], pids: &[i32]) {
+        self.hashtag_starts = starts.to_vec();
+        self.hashtag_lengths = lengths.to_vec();
+        self.hashtag_product_ids = pids.to_vec();
+    }
+
+    pub fn ptr_hashtag_results(&self) -> *const i32 {
+        self.hashtag_results.as_ptr()
     }
 }
 // Nhúng file Rust do JS sinh ra vào kiến trúc hệ thống

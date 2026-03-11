@@ -14,6 +14,8 @@ class CompilerContext {
         this.exportedActions = {};
         // THÊM MỚI: Kho chứa các Action khởi chạy lúc Boot
         this.initActions = [];
+        // 🌟 CÔNG TẮC TREE-SHAKING CHO TÍNH NĂNG HASHTAG
+        this.useHashtagEngine = false;
     }
 
     onInit(actionId) {
@@ -608,6 +610,9 @@ class CompilerContext {
                                 return tempVar;
                             });
                             code += `if (typeof window["${d.fnName}"] === 'function') window["${d.fnName}"](${argExprs.join(', ')});\n`;
+                        } else if (d.type === 'SEARCH_HASHTAGS') {
+                            // Gọi hàm cầu nối JS -> Rust, sau đó tự động nạp vào Virtual Scroll Pool
+                            code += `Motherboard.searchAndRenderHashtags(_mbId, ${d.queryArray}, ${d.isAnd}, "${d.poolName}", ${d.totalProducts});\n`;
                         }
                     });
                 }
@@ -877,7 +882,6 @@ class CompilerContext {
         counts.u8++;
 
         const bucketCount = Math.ceil(nodes.length/32);
-        const defsC = this._genPipelineChunks(newNodes, memMap, oldToNew, bucketCount, 'COMPUTE', 'c');
         const defsR = this._genPipelineChunks(newNodes, memMap, oldToNew, bucketCount, 'RENDER', 'r');
 
         // THÊM MỚI: Dịch địa chỉ Public Ports
@@ -944,12 +948,7 @@ const create${componentName} = (() => {
     const EVENTS = ${JSON.stringify(this.events)};
     const SINKS = ${JSON.stringify(this.sinks.filter(oldId => this.nodes[oldId].type === 'EFFECT').map(oldId => oldToNew[oldId]))};
 
-    // Các hàm tính toán c_exec_x được giữ lại dưới dạng "dự phòng", 
-    // trong thực tế khi chạy WASM, mảng này không còn được đụng tới nữa.
-    ${defsC.join('\n')}
     ${defsR.join('\n')}
-
-    ${buildFuncArray(defsC, 'BATCHES_C')}
     ${buildFuncArray(defsR, 'BATCHES_R')}
 
     const EXPORTED_PORTS = ${exportedPortsCode};
@@ -971,7 +970,7 @@ const create${componentName} = (() => {
             ${actionsCode}
         });
 
-        const _mbId = Motherboard.register(finalName, mem, BATCHES_C, BATCHES_R, EXPORTED_PORTS, ${exportedActionsCode}, actions, ${isActiveIndex});
+        const _mbId = Motherboard.register(finalName, mem, BATCHES_R, EXPORTED_PORTS, ${exportedActionsCode}, actions, ${isActiveIndex});
         bindEvents(root, EVENTS, _mbId);
 
         for (let i = 0; i < COUNTS.totalNodes; i++) {

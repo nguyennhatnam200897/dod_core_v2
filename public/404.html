@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Đang tải...</title>
+    <script>
+        // Lấy đường dẫn thực tế (vd: /cart) nén thành tham số ?p=/cart và ném về index.html
+        var path = window.location.pathname + window.location.search + window.location.hash;
+        window.location.replace('/' + '?p=' + encodeURIComponent(path));
+    </script>
+</head>
+<body></body>
+</html>
