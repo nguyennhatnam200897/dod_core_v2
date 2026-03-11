@@ -59,7 +59,7 @@ for (let tagId = 0; tagId < TOTAL_HASHTAGS; tagId++) {
 
 // 5. XUẤT RA FILE NHỊ PHÂN (.bin) CHUẨN LITTLE-ENDIAN
 // Node.js chạy trên x86/ARM nên buffer nội tại mặc định là Little-Endian (cùng chuẩn với WASM)
-const outputDir = path.join(__dirname, 'public', 'api');
+const outputDir = path.join(__dirname, '../public/api');
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
 }

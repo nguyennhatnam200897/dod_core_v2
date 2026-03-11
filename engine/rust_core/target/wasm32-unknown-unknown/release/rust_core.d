@@ -1,0 +1,1 @@
+C:\Users\PC-\ VPQG\Desktop\dod_core_v2\engine\rust_core\target\wasm32-unknown-unknown\release\rust_core.wasm: C:\Users\PC-\ VPQG\Desktop\dod_core_v2\engine\rust_core\src\generated_compute.rs C:\Users\PC-\ VPQG\Desktop\dod_core_v2\engine\rust_core\src\lib.rs

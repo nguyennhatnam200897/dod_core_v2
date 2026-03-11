@@ -1,5 +1,5 @@
 // runtime_v44.js
-import initWasm, { MotherboardCore } from './pkg/dod_core.js';
+import initWasm, { MotherboardCore } from './pkg/rust_core.js';
 // ==============================================================
 // 🌟 HÀNG ĐỢI MẢNG VÒNG (RING BUFFER) O(1) - ZERO ALLOCATION
 // ==============================================================
@@ -28,6 +28,7 @@ export const Motherboard = {
     lazyRegistry: {}, // 🌟 THÊM MỚI: Sổ đăng ký Component lười biếng
     isComputing: false,
     isRenderScheduled: false,
+    Router: Router,
     
     // 🌟 BẢN VÁ ROUTER: Rút phích cắm diện rộng để tránh rò rỉ bộ nhớ (Memory Leak)
     unplugTree: (containerNode) => {

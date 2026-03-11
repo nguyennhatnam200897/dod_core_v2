@@ -15,6 +15,16 @@ buildApp([HomeView, CartView], path.join(publicDir, 'dist'));
 // 2. LẮP RÁP HTML (SSG)
 const layoutHTML = fs.readFileSync(path.join(templatesDir, 'layout.html'), 'utf-8');
 
+// 🌟 BẢN VÁ: COPY FILE TĨNH RA PUBLIC CHO TRÌNH DUYỆT ĐỌC
+fs.copyFileSync(path.join(__dirname, 'main.js'), path.join(publicDir, 'main.js'));
+fs.copyFileSync(path.join(__dirname, 'store.js'), path.join(publicDir, 'store.js'));
+
+// Tiện tay tạo luôn file style.css rỗng nếu chưa có để trình duyệt khỏi báo lỗi
+if (!fs.existsSync(path.join(publicDir, 'style.css'))) {
+    fs.writeFileSync(path.join(publicDir, 'style.css'), '/* CSS của DOD Shop */');
+}
+console.log("🚚 Đã copy main.js và store.js ra public/");
+
 const pages = [
     { route: '/', dir: publicDir, title: 'Trang chủ | DOD', tpl: 'home.html' },
     { route: '/cart', dir: path.join(publicDir, 'cart'), title: 'Giỏ hàng | DOD', tpl: 'cart.html' }

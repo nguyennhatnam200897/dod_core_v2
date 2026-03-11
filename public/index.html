@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Trang chủ | DOD</title>
+    <meta name="description" content="Enterprise E-commerce">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <a href="/" data-link>DOD Shop</a>
+        <a href="/cart" data-link>Giỏ hàng (<span id="cart-counter">0</span>)</a>
+    </header>
+
+    <main id="app-container">
+        <div class="view-home">
+    <div id="home-grid" class="virtual-grid">
+        <div class="virtual-spacer"></div>
+        <div class="product-card">
+            <h3 class="p-name">Loading...</h3>
+            <p class="p-price">0 đ</p>
+            <button class="btn-add">Thêm</button>
+        </div>
+    </div>
+</div>
+    </main>
+
+    <script type="module" src="/dist/core.js"></script>
+    <script type="module" src="/main.js"></script>
+</body>
+</html>

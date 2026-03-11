@@ -1,0 +1,23 @@
+// init rust
+cargo new --lib dod_core
+cd dod_core
+cargo add wasm-bindgen
+
+
+// change file Cargo.toml
+[package]
+name = "dod_core"
+version = "0.1.0"
+edition = "2021"
+
+# 🌟 BẮT BUỘC PHẢI CÓ ĐOẠN NÀY CHO WEBASSEMBLY
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Thư viện cầu nối giúp Rust nói chuyện được với Javascript
+wasm-bindgen = "0.2
+
+
+// pack rust
+wasm-pack build --target web

@@ -1,5 +1,4 @@
 // compiler_v44.js
-import { allocMemory, hydrate, runDispatch, markBatch } from '../src/js/runtime_v44.js';
 
 class CompilerContext {
     constructor() { this.reset(); }
