@@ -2,6 +2,7 @@
 cargo new --lib dod_core
 cd dod_core
 cargo add wasm-bindgen
+cargo add once_cell
 
 
 // change file Cargo.toml

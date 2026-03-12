@@ -316,18 +316,10 @@ export const blueprint = (componentName, setupFn) => {
                     const argIds = argsInputs.map(a => resolve(a).id);
                     dispatches.push({ type: 'CALL_JS', fnName, argIds });
                 },
-                // 🌟 API TÌM KIẾM HASHTAG CHÍNH THỨC CỦA ENGINE
-                searchHashtags: (queryArrayStr, isAndStr, poolName, totalProducts) => {
-                    // BẬT CÔNG TẮC: Báo cho Compiler biết user có dùng tính năng này!
-                    compiler.useHashtagEngine = true; 
-                    
-                    dispatches.push({ 
-                        type: 'SEARCH_HASHTAGS', 
-                        queryArray: queryArrayStr, 
-                        isAnd: isAndStr, 
-                        totalProducts, 
-                        poolName 
-                    });
+                // 🌟 API GỌI PLUGIN RUST TỪ USER-SPACE (CƠ CHẾ MICRO-OS)
+                callPlugin: (pluginFuncName, poolName, ...argsInputs) => {
+                    const argIds = argsInputs.map(a => resolve(a).id);
+                    dispatches.push({ type: 'CALL_RUST_PLUGIN', pluginFuncName, poolName, argIds });
                 },
             };
 
@@ -501,7 +493,7 @@ export const pool = (blueprint, size) => ({ isPool: true, blueprint, size });
 export const lazy = (blueprint, templateSelector) => ({ isLazy: true, blueprint, templateSelector });
 
 // --- BỘ BUNDLER TIẾN HÓA: CHUNKING & STATIC VIEW POOLING ---
-export const buildApp = (components, outputDir = './src/js/generated') => {
+export const buildApp = (components, outputDir = './src/js/generated', pluginsDir = null) => {
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
     
     // 🌟 BẢN VÁ: COPY FILE RUNTIME SANG PUBLIC ĐỂ TRÌNH DUYỆT CÓ THỂ ĐỌC ĐƯỢC
@@ -510,7 +502,11 @@ export const buildApp = (components, outputDir = './src/js/generated') => {
     fs.copyFileSync(runtimeSrc, runtimeDest);
     console.log(`🚚 Đã chuyển phát Bo mạch chủ (Runtime) tới: ${runtimeDest}`);
 
-    let combinedRustCode = `// 🚀 FILE TỰ ĐỘNG SINH BỞI ENGINE DOD\nuse super::MotherboardCore;\n\nimpl MotherboardCore {\n    pub fn execute_batch(&mut self, chunk_id: usize, mut mask: u32) {\n        match self.comp_name.as_str() {\n`;
+    let combinedRustCode = `// 🚀 FILE TỰ ĐỘNG SINH BỞI ENGINE DOD\nuse super::MotherboardCore;\n\nimpl MotherboardCore {\n    pub fn execute_batch(&mut self, chunk_id: usize, mut mask: u32) {\n`;
+    // 🌟 TỐI ƯU CỰC HẠN: Xin quyền Đọc (Read Lock) duy nhất 1 lần cho cả batch tính toán
+    combinedRustCode += `        let db_i32 = crate::DB_I32_SLOTS.read().unwrap();\n`;
+    combinedRustCode += `        let db_f64 = crate::DB_F64_SLOTS.read().unwrap();\n`;
+    combinedRustCode += `        match self.comp_name.as_str() {\n`;
     
     const uniqueComps = new Set();
     const compList = Array.isArray(components) ? components : Object.values(components);
@@ -534,66 +530,17 @@ export const buildApp = (components, outputDir = './src/js/generated') => {
 
     combinedRustCode += `            _ => {}\n        }\n    }\n}\n`;
 
-    // NẾU COMPILER PHÁT HIỆN TÍNH NĂNG ĐƯỢC SỬ DỤNG -> BƠM MÃ RUST VÀO!
-    if (compiler.useHashtagEngine) {
-        combinedRustCode += `
-#[wasm_bindgen]
-impl MotherboardCore {
-    pub fn run_hashtag_search(&mut self, query_tags: &[i32], is_and: bool, total_products: usize) -> usize {
-        if self.hashtag_results.len() < total_products {
-            self.hashtag_results = vec![0; total_products];
-        }
-        if self.hashtag_counters.len() < total_products {
-            self.hashtag_counters = vec![0; total_products];
-        } else {
-            self.hashtag_counters.fill(0); 
-        }
-
-        if query_tags.is_empty() {
-            for i in 0..total_products { self.hashtag_results[i] = i as i32; }
-            return total_products;
-        }
-
-        let mut match_count = 0;
-
-        if is_and {
-            let required_matches = query_tags.len() as i32;
-            for &tag in query_tags {
-                let tidx = tag as usize;
-                let start = self.hashtag_starts[tidx] as usize;
-                let len = self.hashtag_lengths[tidx] as usize;
-                for i in start..(start + len) {
-                    let pid = self.hashtag_product_ids[i] as usize;
-                    if pid < total_products { self.hashtag_counters[pid] += 1; }
-                }
+    // 🌟 TRÌNH LIÊN KẾT (LINKER): GOM RUST PLUGIN CỦA DEV VÀO ENGINE
+    if (pluginsDir && fs.existsSync(pluginsDir)) {
+        console.log(`🔌 Đang liên kết các Plugin WASM từ không gian dự án: ${pluginsDir}`);
+        const files = fs.readdirSync(pluginsDir);
+        files.forEach(file => {
+            if (file.endsWith('.rs')) {
+                const pluginCode = fs.readFileSync(path.join(pluginsDir, file), 'utf-8');
+                // Nối trực tiếp mã nguồn Rust của User vào ngay phía dưới Lõi Engine
+                combinedRustCode += `\n// --- BẮT ĐẦU PLUGIN: ${file} ---\n${pluginCode}\n// --- KẾT THÚC PLUGIN ---\n`;
             }
-            for pid in 0..total_products {
-                if self.hashtag_counters[pid] == required_matches {
-                    self.hashtag_results[match_count] = pid as i32;
-                    match_count += 1;
-                }
-            }
-        } else {
-            for &tag in query_tags {
-                let tidx = tag as usize;
-                let start = self.hashtag_starts[tidx] as usize;
-                let len = self.hashtag_lengths[tidx] as usize;
-                for i in start..(start + len) {
-                    let pid = self.hashtag_product_ids[i] as usize;
-                    if pid < total_products { self.hashtag_counters[pid] = 1; }
-                }
-            }
-            for pid in 0..total_products {
-                if self.hashtag_counters[pid] == 1 {
-                    self.hashtag_results[match_count] = pid as i32;
-                    match_count += 1;
-                }
-            }
-        }
-        match_count
-    }
-}
-`;
+        });
     }
 
     // 4. Sinh file Core Bootloader (Chỉ chứa setup ban đầu, cực nhẹ)

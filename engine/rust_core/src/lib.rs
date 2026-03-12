@@ -1,4 +1,11 @@
+use once_cell::sync::Lazy;
+use std::sync::RwLock;
 use wasm_bindgen::prelude::*;
+
+// 🌟 KHỞI TẠO DATABASE TOÀN CỤC (GLOBAL SINGLETON)
+// Dùng RwLock để đảm bảo 10,000 components có thể đọc cùng lúc tốc độ tối đa!
+pub static DB_I32_SLOTS: Lazy<RwLock<[Vec<i32>; 16]>> = Lazy::new(|| RwLock::new(Default::default()));
+pub static DB_F64_SLOTS: Lazy<RwLock<[Vec<f64>; 16]>> = Lazy::new(|| RwLock::new(Default::default()));
 
 // 🌟 KIẾN TRÚC BỘ NHỚ CHÍNH (MOTHERBOARD MEMORY)
 #[wasm_bindgen]
@@ -16,25 +23,13 @@ pub struct MotherboardCore {
     flags_r: Vec<u32>,
     l2_r:    Vec<u32>,
     l1_r:    Vec<u32>,
-
-    // 🌟 TÍNH NĂNG CHÍNH: HỆ THỐNG HASHTAG (INVERTED INDEX)
-    hashtag_starts: Vec<i32>,
-    hashtag_lengths: Vec<i32>,
-    hashtag_product_ids: Vec<i32>,
-    hashtag_results: Vec<i32>,
-    hashtag_counters: Vec<i32>,
-
-    // 🌟 THÊM MỚI: CÁC KHE CẮM DATABASE DÙNG CHUNG (SLOTS)
-    // Sử dụng mảng cố định (fixed array) để CPU lấy dữ liệu cực nhanh O(1)
-    db_i32_slots: [Vec<i32>; 16],
-    db_f64_slots: [Vec<f64>; 16],
 }
 
 #[wasm_bindgen]
 impl MotherboardCore {
     #[wasm_bindgen(constructor)]
     // 🌟 THÊM comp_name: String VÀO THAM SỐ ĐẦU TIÊN
-    pub fn new(comp_name: String, f64_count: usize, i32_count: usize, _u8_count: usize, total_nodes: usize) -> MotherboardCore {
+    pub fn new(comp_name: String, f64_count: usize, i32_count: usize, u8_count: usize, total_nodes: usize) -> MotherboardCore {
         let count_l0 = (total_nodes as f32 / 32.0).ceil() as usize;
         let count_l1 = (count_l0 as f32 / 32.0).ceil() as usize;
         let count_l2 = (count_l1 as f32 / 32.0).ceil() as usize;
@@ -43,21 +38,13 @@ impl MotherboardCore {
             comp_name, // 🌟 LƯU TÊN LẠI
             f64_mem: vec![0.0; f64_count],
             i32_mem: vec![0; i32_count],
-            u8_mem:  vec![0; f64_count], 
+            u8_mem:  vec![0; u8_count], 
             flags_c: vec![0; count_l0],
             l2_c:    vec![0; count_l1],
             l1_c:    vec![0; count_l2],
             flags_r: vec![0; count_l0],
             l2_r:    vec![0; count_l1],
             l1_r:    vec![0; count_l2],
-            hashtag_starts: Vec::new(),
-            hashtag_lengths: Vec::new(),
-            hashtag_product_ids: Vec::new(),
-            hashtag_results: Vec::new(),
-            hashtag_counters: Vec::new(),
-            // 🌟 KHỞI TẠO CÁC KHE CẮM TRỐNG
-            db_i32_slots: Default::default(),
-            db_f64_slots: Default::default(),
         }
     }
 
@@ -110,34 +97,28 @@ impl MotherboardCore {
             }
         }
     }
-    // =========================================================
-    // 🌟 API CUNG CẤP CHO DỰ ÁN ĐỂ NẠP DATABASE TỪ JS
-    // =========================================================
-    
-    pub fn load_db_i32(&mut self, slot: usize, data: &[i32]) {
-        if slot < 16 {
-            self.db_i32_slots[slot] = data.to_vec();
-        }
-    }
+}
 
-    pub fn load_db_f64(&mut self, slot: usize, data: &[f64]) {
-        if slot < 16 {
-            self.db_f64_slots[slot] = data.to_vec();
+// =========================================================
+// 🌟 API NẠP DATABASE TỪ JS VÀO VÙNG NHỚ TOÀN CỤC
+// =========================================================
+#[wasm_bindgen]
+pub fn global_load_db_i32(slot: usize, data: &[i32]) {
+    if slot < 16 {
+        if let Ok(mut slots) = DB_I32_SLOTS.write() {
+            slots[slot] = data.to_vec();
         }
-    }
-    
-    // =========================================================
-    // 🌟 API NẠP DATABASE HASHTAG TỪ JS
-    // =========================================================
-    pub fn load_hashtag_db(&mut self, starts: &[i32], lengths: &[i32], pids: &[i32]) {
-        self.hashtag_starts = starts.to_vec();
-        self.hashtag_lengths = lengths.to_vec();
-        self.hashtag_product_ids = pids.to_vec();
-    }
-
-    pub fn ptr_hashtag_results(&self) -> *const i32 {
-        self.hashtag_results.as_ptr()
     }
 }
+
+#[wasm_bindgen]
+pub fn global_load_db_f64(slot: usize, data: &[f64]) {
+    if slot < 16 {
+        if let Ok(mut slots) = DB_F64_SLOTS.write() {
+            slots[slot] = data.to_vec();
+        }
+    }
+}
+
 // Nhúng file Rust do JS sinh ra vào kiến trúc hệ thống
 mod generated_compute;

@@ -115,12 +115,23 @@ export const Motherboard = {
 
     // 🌟 THÊM MỚI 1: Bỏ sự kiện vào hộp thư (Không xử lý ngay)
     pushEvent: (mbId, actionName, args) => {
+        // 🌟 BẢN VÁ BẢO VỆ: Tính toán vị trí tiếp theo của cái đuôi
+        const nextTail = (eqTail + 1) & (EVENT_QUEUE_SIZE - 1);
+
+        // 🌟 PANIC TỪ CHỐI TỬ THẦN: Nếu Đuôi chạm Đầu -> Hàng đợi đã ĐẦY!
+        if (nextTail === eqHead) {
+            console.error(`[Engine Panic] THẢM HỌA HÀNG ĐỢI! Event Queue đã vượt quá ${EVENT_QUEUE_SIZE} sự kiện. 
+            Cảnh báo: Có thể bạn đã tạo ra một Vòng Lặp Vô Tận (Infinite Loop) giữa các Sự kiện / Dispatch!`);
+            // Bỏ qua sự kiện này để bảo vệ Engine khỏi việc sập hoàn toàn
+            return; 
+        }
+
         EQ_COMP_IDS[eqTail] = mbId;
         EQ_ACTION_NAMES[eqTail] = actionName;
         EQ_PAYLOADS[eqTail] = args;
         
         // Tịnh tiến đuôi mảng vòng O(1)
-        eqTail = (eqTail + 1) & (EVENT_QUEUE_SIZE - 1);
+        eqTail = nextTail;
         
         // Đánh thức Engine dậy để chuẩn bị gom mẻ lưới
         Motherboard.wakeUp();
@@ -397,57 +408,62 @@ export const Motherboard = {
             if (compDirty) runDispatch(comp.mem, comp.mem.L1_R, comp.mem.L2_R, comp.mem.FLAGS_R, comp.BATCHES_R);
         }
         Motherboard.isRenderScheduled = false;
-    },
 
-    // 🌟 THÊM MỚI: API cho dự án nạp Database vào Engine
-    loadDatabase: (slotIndex, type, typedArray) => {
-        // Lặp qua tất cả các Component đang chạy và nạp dữ liệu vào Lõi Rust của chúng
-        for (let i = 0; i < Motherboard.compCount; i++) {
-            const comp = Motherboard.components[i];
-            if (comp && comp.mem && comp.mem._rustCore) {
-                if (type === 'I32' || type === 'STR') {
-                    // Chú ý: Chuỗi (STR) trong Engine của bạn được lưu dưới dạng ID (I32)
-                    comp.mem._rustCore.load_db_i32(slotIndex, typedArray);
-                } else if (type === 'F64') {
-                    comp.mem._rustCore.load_db_f64(slotIndex, typedArray);
-                }
+        // ============================================================
+        // 🌟 IDLE GC: SAI VẶT TRÌNH DUYỆT DỌN RÁC NGẦM (BACKGROUND GC)
+        // ============================================================
+        if (arenaHead > nextGcThreshold && !isGcPending) {
+            isGcPending = true;
+            // Nếu trình duyệt rảnh rỗi (Không bận Render frame tiếp theo) -> Gọi GC
+            if (window.requestIdleCallback) {
+                requestIdleCallback(() => compactArena());
+            } else {
+                setTimeout(compactArena, 10);
             }
         }
-        console.log(`[Engine] Đã nạp Database ${type} vào khe số ${slotIndex}`);
+    },
+
+    // 🌟 API NẠP DATABASE TOÀN CỤC (ZERO DUPLICATION)
+    loadDatabase: (slotIndex, type, typedArray) => {
+        if (!wasmModule) {
+            console.error("[Engine] Chưa khởi tạo WASM, không thể nạp Database!");
+            return;
+        }
+
+        // Gọi thẳng API độc lập của Rust, KHÔNG lặp qua Motherboard.components nữa
+        if (type === 'I32' || type === 'STR') {
+            wasmModule.global_load_db_i32(slotIndex, typedArray);
+        } else if (type === 'F64') {
+            wasmModule.global_load_db_f64(slotIndex, typedArray);
+        }
+        console.log(`[Engine] 📦 Đã nạp thành công Database ${type} vào khe số ${slotIndex} toàn cục! (Zero Duplication)`);
     },
     
-    // 🌟 1. NẠP DATABASE HASHTAG TỪ SERVER
-    loadHashtagDatabase: (startsArray, lengthsArray, pidsArray) => {
-        for (let i = 0; i < Motherboard.compCount; i++) {
-            const comp = Motherboard.components[i];
-            if (comp && comp.mem && comp.mem._rustCore) {
-                // Ép kiểu đảm bảo an toàn bộ nhớ
-                comp.mem._rustCore.load_hashtag_db(
-                    new Int32Array(startsArray), 
-                    new Int32Array(lengthsArray), 
-                    new Int32Array(pidsArray)
-                );
-            }
-        }
-        console.log(`[Engine] Đã nạp thành công Database Hashtag (Inverted Index)`);
-    },
-
-    // 🌟 2. CẦU NỐI THỰC THI SEARCH VÀ NẠP VÀO VIRTUAL SCROLL
-    searchAndRenderHashtags: (mbId, queryArray, isAnd, poolName, totalProducts) => {
+    // 🌟 API TRIỆU HỒI WASM PLUGIN (CƠ CHẾ MICRO-OS)
+    // - pluginFuncName: Tên hàm Rust (VD: "run_hashtag_search")
+    // - poolName: Tên Virtual Scroll Pool sẽ nhận kết quả
+    // - args: Mảng các tham số (Số nguyên/Số thực) truyền vào Plugin
+    callRustPlugin: (mbId, pluginFuncName, poolName, ...args) => {
         const comp = Motherboard.components[mbId];
         if (!comp || !comp.mem || !comp.mem._rustCore) return;
 
         const rustCore = comp.mem._rustCore;
-        const queryTags = new Int32Array(queryArray); 
+        
+        // 1. Kiểm tra xem Plugin này có tồn tại trong khối WASM đã build không
+        if (typeof rustCore[pluginFuncName] !== 'function') {
+            console.error(`[Engine Fatal] Không tìm thấy Plugin WASM: '${pluginFuncName}'. Bạn đã link nó vào Engine chưa?`);
+            return;
+        }
 
-        // 1. Chạy Search Engine trong Rust O(K)
-        const matchCount = rustCore.run_hashtag_search(queryTags, isAnd, totalProducts);
+        // 2. Kích hoạt Plugin WASM O(1)
+        // Quy ước: Plugin luôn phải trả về 1 mảng [Pointer, Length] của vùng nhớ kết quả!
+        const [ptr, length] = rustCore[pluginFuncName](...args);
 
-        // 2. ZERO-COPY VIEW: Trích xuất mảng ID kết quả
-        const ptr = rustCore.ptr_hashtag_results();
-        const matchedIds = new Int32Array(wasmModule.memory.buffer, ptr, matchCount);
+        // 3. ZERO-COPY VIEW: Nhìn xuyên thẳng vào RAM của WASM, không copy data!
+        // Giả định kết quả trả về là danh sách các ID (Int32)
+        const matchedIds = new Int32Array(wasmModule.memory.buffer, ptr, length);
 
-        // 3. Đẩy thẳng kết quả vào Pool Cuộn Ảo để render lập tức
+        // 4. Bơm kết quả thẳng vào Pool Cuộn Ảo để render lập tức
         const pool = Motherboard.pools[poolName];
         if (pool && pool._updateData) {
             pool._updateData(matchedIds);
@@ -456,20 +472,30 @@ export const Motherboard = {
 };
 
 // ==============================================================
-// 🌟 KỶ NGUYÊN ZERO-ALLOCATION: STRING ARENA BUMP ALLOCATOR 🌟
+// 🌟 KỶ NGUYÊN ZERO-ALLOCATION: BUMP ALLOCATOR & SEMI-SPACE GC 🌟
 // ==============================================================
-const ARENA_CAPACITY = 4 * 1024 * 1024; // Cấp phát cứng 4MB RAM cho toàn bộ chuỗi động
+const ARENA_CAPACITY = 4 * 1024 * 1024; // 4MB RAM
 export const STRING_ARENA = new Uint8Array(ARENA_CAPACITY);
-let arenaHead = 0; // Con trỏ tịnh tiến (Chỉ tiến lên, không bao giờ lùi)
+const SHADOW_ARENA = new Uint8Array(ARENA_CAPACITY); // 🌟 BẢN VÁ: Vùng nhớ bóng ảo
+
+let arenaHead = 0; 
+let nextGcThreshold = ARENA_CAPACITY * 0.5; // 🌟 Ngưỡng kích hoạt GC linh hoạt (Khởi điểm 50%)
+let isGcPending = false; // Cờ chống gọi GC trùng lặp
 
 // SoA Metadata (Thay thế Array Object JS bằng RAM Tĩnh)
 const MAX_STR_NODES = 65536; // Quản lý tối đa 64,000 chuỗi
-const STR_OFFSET = new Uint32Array(MAX_STR_NODES); // Lưu vị trí bắt đầu
-const STR_LEN    = new Uint32Array(MAX_STR_NODES); // Lưu độ dài byte
-const STR_REFS   = new Int32Array(MAX_STR_NODES);  // Đếm số lượng Node đang dùng
-const STR_FREE   = new Int32Array(MAX_STR_NODES);  // Kho chứa ID rảnh rỗi
+const STR_OFFSET = new Uint32Array(MAX_STR_NODES); 
+const STR_LEN    = new Uint32Array(MAX_STR_NODES); 
+const STR_REFS   = new Int32Array(MAX_STR_NODES);  
+const STR_FREE   = new Int32Array(MAX_STR_NODES);  
 let metaCount = 0;
 let freeHead = 0;
+
+// ==============================================================
+// 🌟 THÊM MỚI: BỘ NỘI SUY CHUỖI (STRING INTERNING)
+// ==============================================================
+const STR_CACHE   = new Map(); // Ánh xạ: String -> ID (Tốc độ O(1) nhờ V8 Hash)
+const STR_CONTENT = new Array(MAX_STR_NODES); // Ánh xạ: ID -> String (Để dọn rác Map)
 
 // Bộ mã hóa/Giải mã phần cứng của Trình duyệt (Rất nhanh và không xả rác)
 const encoder = new TextEncoder();
@@ -479,7 +505,15 @@ const decoder = new TextDecoder();
 export function setDynamicString(str) {
     if (typeof str !== 'string') return str; 
 
-    // 1. Cấp phát ID Nguyên thủy O(1)
+    // 🌟 1. STRING INTERNING: Nếu chuỗi đã tồn tại, dùng lại ID cũ!
+    if (STR_CACHE.has(str)) {
+        const existingId = STR_CACHE.get(str);
+        const idx = -(existingId) - 1;
+        STR_REFS[idx]++; // Tăng refcount
+        return existingId;
+    }
+
+    // 2. Cấp phát ID Nguyên thủy O(1) (Nếu chuỗi mới hoàn toàn)
     let idx;
     if (freeHead > 0) {
         freeHead--;
@@ -488,30 +522,30 @@ export function setDynamicString(str) {
         idx = metaCount++;
     }
 
-    // Ước tính kích thước byte tối đa (UTF-8 có thể chiếm tới 3-4 bytes/ký tự)
     const maxBytes = str.length * 4; 
 
-    // 🌟 PHÉP MÀU DOD: NẾU TRÀN RAM -> DỒN RÁC THỦ CÔNG (DEFRAGMENTATION)
     if (arenaHead + maxBytes > ARENA_CAPACITY) {
         compactArena();
         if (arenaHead + maxBytes > ARENA_CAPACITY) {
-            console.error("[Engine Fatal] String Arena bị tràn! Hãy tăng ARENA_CAPACITY.");
-            return 0; // Fallback an toàn
+            console.error("[Engine Fatal] String Arena bị tràn!");
+            return 0; 
         }
     }
 
-    // 2. ZERO-ALLOCATION ENCODE: Ghi đè trực tiếp vào RAM, không sinh ra object JS mới
     const encodeResult = encoder.encodeInto(str, STRING_ARENA.subarray(arenaHead));
 
-    // 3. Cập nhật Metadata
     STR_OFFSET[idx] = arenaHead;
     STR_LEN[idx] = encodeResult.written;
     STR_REFS[idx] = 1;
 
-    // Tịnh tiến con trỏ
+    // 🌟 3. LƯU VÀO BỘ NHỚ INTERNING CACHE
+    const newId = -(idx + 1);
+    STR_CACHE.set(str, newId);
+    STR_CONTENT[idx] = str; // Lưu lại để lúc release có key mà xóa Map
+
     arenaHead += encodeResult.written;
 
-    return -(idx + 1); // Trả về ID âm (Giữ nguyên chuẩn cũ của Compiler)
+    return newId;
 }
 
 export function retainDynamicString(id) {
@@ -528,9 +562,15 @@ export function releaseDynamicString(id) {
     if (STR_REFS[idx] > 0) {
         STR_REFS[idx]--;
         
-        // Khi không còn ai dùng, chỉ việc trả ID về kho rảnh rỗi.
-        // Tuyệt đối KHÔNG xóa byte trong STRING_ARENA. Byte cũ sẽ tự bị ghi đè sau này.
         if (STR_REFS[idx] === 0) {
+            // 🌟 1. DỌN RÁC MAP INTERNING
+            const str = STR_CONTENT[idx];
+            if (str !== undefined) {
+                STR_CACHE.delete(str);
+                STR_CONTENT[idx] = undefined; // Cắt đứt tham chiếu để V8 gom rác chuỗi JS
+            }
+
+            // 2. Trả ID về kho rảnh rỗi
             STR_FREE[freeHead] = idx;
             freeHead++;
         }
@@ -538,39 +578,49 @@ export function releaseDynamicString(id) {
 }
 
 // ==============================================================
-// 🌟 BỘ GOM RÁC CƠ HỌC (THAY THẾ V8 GC) 🌟
-// Chạy cực nhanh nhờ TypedArray.copyWithin cấp thấp của C++
+// 🌟 BỘ GOM RÁC SEMI-SPACE (KHÔNG GIAN ĐÔI) 🌟
+// Chạy cực nhanh (< 1ms) và Miễn nhiễm với lỗi Ghi đè bộ nhớ
 // ==============================================================
 function compactArena() {
-    // console.warn("[Engine] Bắt đầu dồn phân mảnh String Arena...");
     let newHead = 0;
     
+    // BƯỚC 1: Quét rác và chép toàn bộ chuỗi SỐNG sang Không gian Bóng (Shadow)
+    // Vì SHADOW là mảng trống, thứ tự ID lộn xộn cũng không bao giờ đè lên nhau!
     for (let i = 0; i < metaCount; i++) {
-        // Chỉ giữ lại những chuỗi đang SỐNG trên màn hình
         if (STR_REFS[i] > 0) {
             const len = STR_LEN[i];
             const oldOffset = STR_OFFSET[i];
             
-            // Dịch chuyển byte lên đầu Arena (Overscan an toàn)
-            if (newHead !== oldOffset) {
-                STRING_ARENA.copyWithin(newHead, oldOffset, oldOffset + len);
-                STR_OFFSET[i] = newHead; // Cập nhật lại tọa độ mới
-            }
+            // Ép kiểu Zero-allocation view để chép nguyên khối byte cực nhanh
+            SHADOW_ARENA.set(STRING_ARENA.subarray(oldOffset, oldOffset + len), newHead);
+            
+            STR_OFFSET[i] = newHead; 
             newHead += len;
         }
     }
     
+    // BƯỚC 2: Chép ngược khối dữ liệu SẠCH (Đã nén) trở lại Arena Chính
+    STRING_ARENA.set(SHADOW_ARENA.subarray(0, newHead), 0);
     arenaHead = newHead;
-    // console.log(`[Engine] Dồn RAM xong. Đã thu hồi và nén gọn còn: ${arenaHead} bytes.`);
+
+    // 🌟 ANTI-DEATH-SPIRAL (Chống vòng lặp GC vô tận):
+    // Lần GC nhàn rỗi tiếp theo chỉ chạy khi RAM tăng thêm ít nhất 512KB so với hiện tại
+    nextGcThreshold = Math.min(arenaHead + 512 * 1024, ARENA_CAPACITY * 0.9);
+    isGcPending = false;
 }
 
-// 🌟 HÀM XUẤT CHUỖI RA DOM (Chỉ giải mã ĐÚNG MỘT LẦN khi Render)
 export function getDynamicString(id) {
     if (id >= 0) return ""; 
     const idx = -(id) - 1;
+
+    // 🌟 TỐI ƯU CỰC HẠN (DOM Render): Lấy thẳng chuỗi từ mảng song song
+    // Tránh được 100% chi phí chạy TextDecoder trong vòng lặp Render!
+    const cachedStr = STR_CONTENT[idx];
+    if (cachedStr !== undefined) return cachedStr;
+
+    // Fallback an toàn (Sẽ không bao giờ chạy vào đây nếu luồng chạy chuẩn)
     const offset = STR_OFFSET[idx];
     const len = STR_LEN[idx];
-    // Đây là nơi duy nhất JS Engine tạo ra String Object, và nó cắm thẳng vào DOM
     return decoder.decode(STRING_ARENA.subarray(offset, offset + len));
 }
 

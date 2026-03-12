@@ -13,8 +13,6 @@ class CompilerContext {
         this.exportedActions = {};
         // THÊM MỚI: Kho chứa các Action khởi chạy lúc Boot
         this.initActions = [];
-        // 🌟 CÔNG TẮC TREE-SHAKING CHO TÍNH NĂNG HASHTAG
-        this.useHashtagEngine = false;
     }
 
     onInit(actionId) {
@@ -220,10 +218,10 @@ class CompilerContext {
             gen: (acc, target) => {
                 if (target === 'RUST') {
                     // Tự động phân luồng khe cắm dựa trên kiểu dữ liệu
-                    const rustSlotName = physicalMem === 'F64' ? 'db_f64_slots' : 'db_i32_slots';
+                    const rustSlotName = physicalMem === 'F64' ? 'db_f64' : 'db_i32';
                     
-                    // Mã Rust sinh ra sẽ là: self.db_f64_slots[0][id as usize]
-                    let valExpr = `self.${rustSlotName}[${slotIndex}][${acc[0]} as usize]`;
+                    // 🌟 BẢN VÁ: Dùng biến lock local `db_i32` thay vì `self.db_i32_slots`
+                    let valExpr = `${rustSlotName}[${slotIndex}][${acc[0]} as usize]`;
                     
                     if (unpackConfig) {
                         if (unpackConfig.shift) valExpr = `(${valExpr} >> ${unpackConfig.shift})`;
@@ -531,7 +529,7 @@ class CompilerContext {
                             const expr = this._buildInlineExpr(d.sourceId, memMap, oldToNew);
                             code += `const _disp_${idx}_val = ${expr};\n`;
                             d._tempVal = `_disp_${idx}_val`;
-                        } else if (d.type === 'CALL_JS') {
+                        } else if (d.type === 'CALL_JS' || d.type === 'CALL_RUST_PLUGIN') {
                             d._tempArgs = d.argIds.map((oldId, i) => {
                                 const expr = this._buildInlineExpr(oldId, memMap, oldToNew);
                                 code += `const _disp_${idx}_arg_${i} = ${expr};\n`;
@@ -609,9 +607,16 @@ class CompilerContext {
                                 return tempVar;
                             });
                             code += `if (typeof window["${d.fnName}"] === 'function') window["${d.fnName}"](${argExprs.join(', ')});\n`;
-                        } else if (d.type === 'SEARCH_HASHTAGS') {
-                            // Gọi hàm cầu nối JS -> Rust, sau đó tự động nạp vào Virtual Scroll Pool
-                            code += `Motherboard.searchAndRenderHashtags(_mbId, ${d.queryArray}, ${d.isAnd}, "${d.poolName}", ${d.totalProducts});\n`;
+                        } else if (d.type === 'CALL_RUST_PLUGIN') {
+                            const argExprs = d._tempArgs.map((tempVar, i) => {
+                                const oldId = d.argIds[i];
+                                const node = this.nodes[oldId];
+                                if (node.semantic === 'STR' || node.mem === 'STR') {
+                                    return `${tempVar} >= 0 ? (LUT[${tempVar}] || LUT[0]) : getDynamicString(${tempVar})`;
+                                }
+                                return tempVar;
+                            });
+                            code += `Motherboard.callRustPlugin(_mbId, "${d.pluginFuncName}", "${d.poolName}", ${argExprs.join(', ')});\n`;
                         }
                     });
                 }
@@ -861,15 +866,29 @@ class CompilerContext {
         
         const counts = { f64: 0, i32: 0, u8: 0, sinks: 0, totalNodes: nodes.length, graphSize: 0 };
         
-        const stringIndices = []; 
+        // 🌟 BẢN VÁ: Chỉ thu thập Chuỗi Động để dọn rác
+        const dynamicStringIndices = []; 
+        
+        // Trình dò tìm (Analyzer): Xem Node này có bị ghi đè không?
+        const isMutated = (oldId) => this.actions.some(act => act.type === 'MUTATION' && act.assignments.some(a => a.targetId === oldId));
+        // Trình dò tìm: Xem Node này có phải là Cổng vào (Props) không?
+        const isExported = (oldId) => Object.values(this.exports).some(exp => exp.oldId === oldId);
 
         const memMap = newNodes.map((n, newIdx) => { 
             if (n.type === 'EFFECT') { counts.sinks++; return counts.sinks - 1; } 
             if (n.mem === 'F64') return counts.f64++; 
             if (n.mem === 'I32') {
                 const idx = counts.i32++;
-                // THÊM DÒNG NÀY: Nếu Node này chứa chuỗi, lưu index lại để sau này Recycle dọn rác
-                if (n.semantic === 'STR') stringIndices.push(idx);
+                
+                // 🌟 BẢN VÁ BỘ NHỚ: Phân loại Chuỗi để bảo vệ
+                if (n.semantic === 'STR') {
+                    // Chuỗi Tĩnh = Không phải Props && Không bị Actions nào ghi đè
+                    const isStaticSignal = n.type === 'SIGNAL' && !isExported(n._oldId) && !isMutated(n._oldId);
+                    
+                    if (!isStaticSignal) {
+                        dynamicStringIndices.push(idx); // Chỉ Chuỗi Động mới phải đóng thuế (Gom rác)
+                    }
+                }
                 return idx;
             }
             if (n.mem === 'U8')  return counts.u8++; 
@@ -912,11 +931,18 @@ class CompilerContext {
         // SAU ĐÓ mới chốt kích thước của mảng GRAPH
         counts.graphSize = this.graphData.length;
         
+        // 🌟 BẢN VÁ TỐI THƯỢNG: Giao thoa Thế giới Tĩnh và Động
         const initData = { 
-            F64: newNodes.filter(n=>n.mem==='F64').map(n=>n.val||0), 
-            I32: newNodes.filter(n=>n.mem==='I32').map(n=>n.val||0), 
+            F64: newNodes.filter(n=>n.mem==='F64').map(n=>n.val||0).join(', '), 
+            I32: newNodes.filter(n=>n.mem==='I32').map(n => {
+                // Nếu là Chuỗi Tĩnh (được tạo từ g.signal("...")), chuyển nó thành ID Chuỗi Động (ID âm)
+                if (n.semantic === 'STR' && n.type === 'SIGNAL' && n.val !== null && n.val !== undefined) {
+                    return `setDynamicString(${JSON.stringify(this.stringTable[n.val])})`;
+                }
+                return n.val || 0;
+            }).join(', '), 
             // Nạp số 1 vào slot cuối cùng để Component mặc định được cắm điện!
-            U8:  [...newNodes.filter(n=>n.mem==='U8').map(n=>n.val||0), 1] 
+            U8:  [...newNodes.filter(n=>n.mem==='U8').map(n=>n.val||0), 1].join(', ') 
         };
         
         // 🌟 BẢN VÁ: Lọc bỏ các Node Toán học ẩn, chỉ giữ lại Node Effect (DOM)
@@ -959,7 +985,7 @@ const create${componentName} = (() => {
         const { F64, I32, U8, DOM, CACHE, GRAPH, FLAGS_C, L2_C, L1_C, FLAGS_R, L2_R, L1_R } = mem; 
         
         F64.set([${initData.F64}]); 
-        I32.set([${initData.I32}]); 
+        I32.set([${initData.I32}]); // 🌟 Trình duyệt sẽ tự thực thi setDynamicString ở đây lúc boot
         U8.set([${initData.U8}]);
         GRAPH.set([${this.graphData.join(',')}]);
 
@@ -982,7 +1008,7 @@ const create${componentName} = (() => {
         Motherboard.enqueue(_mbId);
         Motherboard.wakeUp();
 
-        const STR_INDICES = ${JSON.stringify(stringIndices)};
+        const STR_INDICES = ${JSON.stringify(dynamicStringIndices)};
 
         ${this.initActions.length > 0 ? `setTimeout(() => {\n            ${this.initActions.map(id => `actions.${id}();`).join('\n            ')}\n            Motherboard.enqueue(_mbId);\n            Motherboard.wakeUp();\n        }, 0);` : ''}
 
